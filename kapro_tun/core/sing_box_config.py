@@ -60,6 +60,7 @@ TUN_MTU = 1400
 TUN_STACK = "gvisor"
 HEALTH_PROXY_HOST = "127.0.0.1"
 HEALTH_PROXY_PORT = 2082
+BROWSER_PROXY_PORT = 2083
 
 # Private / LAN / Docker / link-local / loopback + multicast/broadcast that must
 # always stay OFF the tunnel (routed to `direct`, which exits the physical NIC).
@@ -577,17 +578,28 @@ def build_config(
         # instead of looping it back into the TUN. This is what auto_route would
         # set automatically; with auto_route off we set it ourselves.
         route_block["default_mark"] = 1
+    inbounds = [tun_inbound, {
+        # Health checks only. This route is pinned to proxy below so readiness
+        # proves the selected outbound independently of split-routing rules.
+        "type": "mixed",
+        "tag": "health-probe",
+        "listen": HEALTH_PROXY_HOST,
+        "listen_port": HEALTH_PROXY_PORT,
+    }]
+    if _IS_MACOS:
+        inbounds.append({
+            # Chromium avoids its broken raw-TUN TLS path via the macOS system
+            # proxy. Unlike health-probe, this inbound follows normal route
+            # rules, preserving RU/direct-domain split routing.
+            "type": "mixed",
+            "tag": "browser-proxy",
+            "listen": HEALTH_PROXY_HOST,
+            "listen_port": BROWSER_PROXY_PORT,
+        })
     return {
         "log": {"level": log_level, "timestamp": True},
         "dns": dns_block,
-        "inbounds": [tun_inbound, {
-            # Health checks only. User traffic still enters through native TUN;
-            # this does not recreate the old tun2socks/SOCKS bridge.
-            "type": "mixed",
-            "tag": "health-probe",
-            "listen": HEALTH_PROXY_HOST,
-            "listen_port": HEALTH_PROXY_PORT,
-        }],
+        "inbounds": inbounds,
         "outbounds": [
             outbound,
             {"type": "direct", "tag": "direct"},

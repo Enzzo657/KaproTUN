@@ -6056,14 +6056,28 @@ def _v3_macos_browser_proxy_bridge() -> None:
     enabled = {
         "_os": "mac",
         "services": {"Wi-Fi": {
-            "http": {"enabled": "Yes", "server": "127.0.0.1", "port": "2082"},
-            "https": {"enabled": "Yes", "server": "127.0.0.1", "port": "2082"},
+            "http": {"enabled": "Yes", "server": "127.0.0.1", "port": "2083"},
+            "https": {"enabled": "Yes", "server": "127.0.0.1", "port": "2083"},
         }},
     }
-    if not sp.state_uses_proxy(enabled, "127.0.0.1", 2082):
+    if not sp.state_uses_proxy(enabled, "127.0.0.1", 2083):
         raise AssertionError("macOS proxy snapshot must recognize the browser bridge")
-    if sp.state_uses_proxy(previous, "127.0.0.1", 2082):
+    if sp.state_uses_proxy(previous, "127.0.0.1", 2083):
         raise AssertionError("disabled macOS proxy must not match the browser bridge")
+
+    from kapro_tun.core import sing_box_config as sb
+    original_is_macos = sb._IS_MACOS
+    try:
+        sb._IS_MACOS = True
+        config = sb.build_config(parsed["vless"], ["example.ru"], server_ip="1.2.3.4")
+    finally:
+        sb._IS_MACOS = original_is_macos
+    browser = [i for i in config["inbounds"] if i.get("tag") == "browser-proxy"]
+    if len(browser) != 1 or browser[0].get("listen_port") != 2083:
+        raise AssertionError("macOS config must expose a dedicated browser proxy")
+    if any("browser-proxy" in (rule.get("inbound") or [])
+           for rule in config["route"]["rules"]):
+        raise AssertionError("browser proxy must follow normal split-routing rules")
 
     original_platform = ctrl.sys.platform
     original_get = sp.get_state
@@ -6084,7 +6098,7 @@ def _v3_macos_browser_proxy_bridge() -> None:
         mgr = ctrl.ConnectionManager(on_log=lambda _line: None)
         mgr.settings["auto_set_system_proxy"] = True
         mgr._enable_macos_browser_proxy()
-        if calls["set"] != [("127.0.0.1", 2082, "")]:
+        if calls["set"] != [("127.0.0.1", 2083, "")]:
             raise AssertionError(f"wrong macOS browser bridge endpoint: {calls['set']}")
         mgr._restore_system_proxy()
         if calls["restore"] != [previous]:
@@ -6109,7 +6123,7 @@ def _v3_macos_browser_proxy_bridge() -> None:
             enabled["services"]["Wi-Fi"]["http"] if verb == "-getwebproxy"
             else {"enabled": "Yes", "server": "proxy.corp", "port": "443"})
         sp._mac_run = lambda args, check=True: commands.append(args)
-        sp._mac_disable_proxy_if_matches("127.0.0.1", 2082)
+        sp._mac_disable_proxy_if_matches("127.0.0.1", 2083)
     finally:
         sp._mac_active_services = original_services
         sp._mac_query_one = original_query

@@ -457,17 +457,17 @@ class ConnectionManager:
             # An empty override preserves the user's existing bypass domains.
             system_proxy.set_proxy(
                 sing_box_config.HEALTH_PROXY_HOST,
-                sing_box_config.HEALTH_PROXY_PORT,
+                sing_box_config.BROWSER_PROXY_PORT,
                 override="",
             )
             current = system_proxy.get_state()
             if not system_proxy.state_uses_proxy(
                     current, sing_box_config.HEALTH_PROXY_HOST,
-                    sing_box_config.HEALTH_PROXY_PORT):
+                    sing_box_config.BROWSER_PROXY_PORT):
                 raise RuntimeError("networksetup did not enable the proxy")
             self._log("[*] macOS: браузерный трафик направлен через локальный "
                       f"proxy {sing_box_config.HEALTH_PROXY_HOST}:"
-                      f"{sing_box_config.HEALTH_PROXY_PORT}.")
+                      f"{sing_box_config.BROWSER_PROXY_PORT}.")
         except Exception as e:
             if previous is not None:
                 try:

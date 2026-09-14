@@ -100,18 +100,21 @@ def _clear_stale_system_proxy() -> None:
         # is active. A hard-killed app cannot restore the saved proxy snapshot,
         # so clear only our dead endpoint and leave unrelated service proxies.
         host = sing_box_config.HEALTH_PROXY_HOST
-        port = sing_box_config.HEALTH_PROXY_PORT
-        if not system_proxy.state_uses_proxy(state, host, port):
-            return
-        try:
-            with socket.create_connection((host, port), timeout=0.3):
-                return
-        except OSError:
-            pass
-        try:
-            system_proxy.disable_proxy_if_matches(host, port)
-        except Exception:
-            pass
+        # Also clean 2082 used briefly by v3.7.7 before the browser and health
+        # inbounds were separated to preserve split routing.
+        for port in (sing_box_config.BROWSER_PROXY_PORT,
+                     sing_box_config.HEALTH_PROXY_PORT):
+            if not system_proxy.state_uses_proxy(state, host, port):
+                continue
+            try:
+                with socket.create_connection((host, port), timeout=0.3):
+                    continue
+            except OSError:
+                pass
+            try:
+                system_proxy.disable_proxy_if_matches(host, port)
+            except Exception:
+                pass
         return
     if not state or not state.get("enable"):
         return
