@@ -17,6 +17,15 @@ Windows). Android-клиент живёт в отдельном репозито
 
 # Desktop (Windows + Python)
 
+## v3.7.9 — корпоративный OpenVPN снова работает вместе с KaproTUN на macOS
+
+- Browser bridge теперь разрешает hostname системным DNS до применения правил
+  маршрутизации. Корпоративные имена, которые OpenVPN резолвит в приватные сети,
+  попадают в существующий `direct`-маршрут и уходят через интерфейс OpenVPN, а не
+  через внешний сервер KaproTUN.
+- Публичные сайты по-прежнему используют обычный split routing KaproTUN; Windows
+  и Linux не затронуты.
+
 ## v3.7.8 — Chrome исправлен без потери split routing
 
 - Browser bridge на macOS вынесен на отдельный loopback-вход `127.0.0.1:2083`.

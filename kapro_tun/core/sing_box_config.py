@@ -463,6 +463,12 @@ def build_config(
         {"action": "sniff"},
         {"inbound": ["health-probe"], "action": "route", "outbound": "proxy"},
     ]
+    if _IS_MACOS:
+        # The system browser proxy supplies a hostname, not its destination IP.
+        # Resolve it before the private/geoip rules so corporate names installed
+        # by a later OpenVPN connection can match its private routes and go direct.
+        rules.append({"inbound": ["browser-proxy"], "action": "resolve",
+                      "strategy": "ipv4_only"})
     # Hijack all DNS (:53) into the dns module, which resolves via the system
     # resolver (type: local) over the physical NIC. No resolver-IP carve-out
     # rule is needed any more: `local` dials the OS resolver directly instead of

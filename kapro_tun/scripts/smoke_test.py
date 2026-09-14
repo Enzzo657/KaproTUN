@@ -6075,9 +6075,15 @@ def _v3_macos_browser_proxy_bridge() -> None:
     browser = [i for i in config["inbounds"] if i.get("tag") == "browser-proxy"]
     if len(browser) != 1 or browser[0].get("listen_port") != 2083:
         raise AssertionError("macOS config must expose a dedicated browser proxy")
-    if any("browser-proxy" in (rule.get("inbound") or [])
-           for rule in config["route"]["rules"]):
-        raise AssertionError("browser proxy must follow normal split-routing rules")
+    browser_rules = [rule for rule in config["route"]["rules"]
+                     if "browser-proxy" in (rule.get("inbound") or [])]
+    if len(browser_rules) != 1 or browser_rules[0].get("action") != "resolve":
+        raise AssertionError("browser proxy must resolve hostnames before split routing")
+    rules = config["route"]["rules"]
+    private_index = next(i for i, rule in enumerate(rules)
+                         if "10.0.0.0/8" in (rule.get("ip_cidr") or []))
+    if rules.index(browser_rules[0]) >= private_index:
+        raise AssertionError("browser hostname resolution must precede private VPN routes")
 
     original_platform = ctrl.sys.platform
     original_get = sp.get_state
