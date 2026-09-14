@@ -10,8 +10,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
 from .core import (app_log, autostart, firewall_sweep, i18n, ipv6_block, killswitch,
-                   linux_tun_route, storage, system_proxy, tun_recovery,
-                   webrtc_block)
+                   linux_tun_route, sing_box_config, storage, system_proxy,
+                   tun_recovery, webrtc_block)
 from .gui import icons
 from .gui.main_window import MainWindow
 from .gui.singleton import SingleInstanceGuard
@@ -81,22 +81,37 @@ def _kill_orphan_helpers() -> None:
 
 
 def _clear_stale_system_proxy() -> None:
-    """If the registry still says system-proxy points at 127.0.0.1:<our port>
-    but nothing's listening there, clear it.
+    """Clear a dead KaproTUN loopback proxy left by an unclean shutdown.
 
-    Happens when a previous HTTP-mode session was killed hard (Task Manager,
-    Windows reboot mid-session) before disconnect() could restore the
-    registry. Result: every browser/app on the machine tries to send
-    traffic through a dead port and gets "connection refused" until the
-    user manually clears it via Windows Settings.
+    Windows stores one global proxy; macOS stores HTTP/HTTPS proxy slots per
+    network service. On macOS only matching KaproTUN slots are disabled, so an
+    unrelated corporate proxy on another service is preserved.
 
     The single-instance guard runs BEFORE this, so if we reach this point
-    no other KaproTUN is running — meaning a 127.0.0.1:<port> proxy entry
-    is guaranteed stale.
+    no other KaproTUN is running. A loopback entry is stale only when its
+    listener is also gone.
     """
     try:
         state = system_proxy.get_state()
     except Exception:
+        return
+    if sys.platform == "darwin":
+        # v3.7.7+: Chromium uses the sing-box loopback mixed inbound while TUN
+        # is active. A hard-killed app cannot restore the saved proxy snapshot,
+        # so clear only our dead endpoint and leave unrelated service proxies.
+        host = sing_box_config.HEALTH_PROXY_HOST
+        port = sing_box_config.HEALTH_PROXY_PORT
+        if not system_proxy.state_uses_proxy(state, host, port):
+            return
+        try:
+            with socket.create_connection((host, port), timeout=0.3):
+                return
+        except OSError:
+            pass
+        try:
+            system_proxy.disable_proxy_if_matches(host, port)
+        except Exception:
+            pass
         return
     if not state or not state.get("enable"):
         return

@@ -72,6 +72,44 @@ def disable_proxy() -> None:
         _linux_disable_proxy()
 
 
+def state_uses_proxy(state: dict, host: str, port: int) -> bool:
+    """Return whether a snapshot has an enabled HTTP(S) proxy at host:port."""
+    expected_port = str(port)
+    os_name = state.get("_os")
+    if os_name == "win":
+        return (bool(state.get("enable"))
+                and state.get("server") == f"{host}:{expected_port}")
+    if os_name == "mac":
+        for service in state.get("services", {}).values():
+            for kind in ("http", "https"):
+                conf = service.get(kind, {})
+                if (conf.get("enabled", "").lower() == "yes"
+                        and conf.get("server") == host
+                        and conf.get("port") == expected_port):
+                    return True
+        return False
+    if os_name == "linux" and "manual" in str(state.get("mode", "")):
+        return any(
+            str(state.get(f"{kind}_host", "")).strip("'\"") == host
+            and str(state.get(f"{kind}_port", "")) == expected_port
+            for kind in ("http", "https")
+        )
+    return False
+
+
+def disable_proxy_if_matches(host: str, port: int) -> None:
+    """Disable only enabled proxy entries that point at host:port."""
+    if sys.platform == "darwin":
+        _mac_disable_proxy_if_matches(host, port)
+        return
+    try:
+        state = get_state()
+    except Exception:
+        return
+    if state_uses_proxy(state, host, port):
+        disable_proxy()
+
+
 def restore(state: dict) -> None:
     """Reapply a snapshot taken with get_state()."""
     if not state:
@@ -239,6 +277,25 @@ def _mac_disable_proxy() -> None:
             continue
 
 
+def _mac_disable_proxy_if_matches(host: str, port: int) -> None:
+    """Clear only KaproTUN's proxy slots, preserving unrelated services."""
+    expected_port = str(port)
+    for svc in _mac_active_services():
+        for query_verb, state_verb in (
+            ("-getwebproxy", "-setwebproxystate"),
+            ("-getsecurewebproxy", "-setsecurewebproxystate"),
+        ):
+            conf = _mac_query_one(svc, query_verb)
+            if (conf.get("enabled", "").lower() != "yes"
+                    or conf.get("server") != host
+                    or conf.get("port") != expected_port):
+                continue
+            try:
+                _mac_run(["/usr/sbin/networksetup", state_verb, svc, "off"])
+            except subprocess.CalledProcessError:
+                pass
+
+
 def _mac_restore(state: dict) -> None:
     """Reapply the per-service web/secure-web settings we snapshotted."""
     services = state.get("services", {})
@@ -253,6 +310,9 @@ def _mac_restore(state: dict) -> None:
                 pass
         else:
             try:
+                if http.get("server"):
+                    _mac_run(["/usr/sbin/networksetup", "-setwebproxy", svc,
+                              http["server"], http.get("port", "80")])
                 _mac_run(["/usr/sbin/networksetup", "-setwebproxystate", svc, "off"])
             except subprocess.CalledProcessError:
                 pass
@@ -266,6 +326,9 @@ def _mac_restore(state: dict) -> None:
                 pass
         else:
             try:
+                if https.get("server"):
+                    _mac_run(["/usr/sbin/networksetup", "-setsecurewebproxy", svc,
+                              https["server"], https.get("port", "443")])
                 _mac_run(["/usr/sbin/networksetup", "-setsecurewebproxystate", svc, "off"])
             except subprocess.CalledProcessError:
                 pass

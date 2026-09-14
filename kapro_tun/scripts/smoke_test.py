@@ -6039,6 +6039,86 @@ def _v3_disconnect_restores_dns() -> None:
         raise AssertionError("sing-box rollback must stop the process + wipe configs")
 
 
+def _v3_macos_browser_proxy_bridge() -> None:
+    # Chromium TLS can fail over the macOS userspace TUN even though sing-box's
+    # loopback mixed inbound works. The controller must bridge system HTTP(S) to
+    # that inbound, then restore the exact previous state on disconnect.
+    from kapro_tun.core import controller as ctrl
+    from kapro_tun.core import system_proxy as sp
+
+    previous = {
+        "_os": "mac",
+        "services": {"Wi-Fi": {
+            "http": {"enabled": "No", "server": "", "port": "0"},
+            "https": {"enabled": "No", "server": "", "port": "0"},
+        }},
+    }
+    enabled = {
+        "_os": "mac",
+        "services": {"Wi-Fi": {
+            "http": {"enabled": "Yes", "server": "127.0.0.1", "port": "2082"},
+            "https": {"enabled": "Yes", "server": "127.0.0.1", "port": "2082"},
+        }},
+    }
+    if not sp.state_uses_proxy(enabled, "127.0.0.1", 2082):
+        raise AssertionError("macOS proxy snapshot must recognize the browser bridge")
+    if sp.state_uses_proxy(previous, "127.0.0.1", 2082):
+        raise AssertionError("disabled macOS proxy must not match the browser bridge")
+
+    original_platform = ctrl.sys.platform
+    original_get = sp.get_state
+    original_set = sp.set_proxy
+    original_restore = sp.restore
+    calls = {"get": 0, "set": [], "restore": []}
+
+    def fake_get():
+        calls["get"] += 1
+        return previous if calls["get"] == 1 else enabled
+
+    try:
+        ctrl.sys.platform = "darwin"
+        sp.get_state = fake_get
+        sp.set_proxy = lambda host, port, override="<local>": calls["set"].append(
+            (host, port, override))
+        sp.restore = lambda state: calls["restore"].append(state)
+        mgr = ctrl.ConnectionManager(on_log=lambda _line: None)
+        mgr.settings["auto_set_system_proxy"] = True
+        mgr._enable_macos_browser_proxy()
+        if calls["set"] != [("127.0.0.1", 2082, "")]:
+            raise AssertionError(f"wrong macOS browser bridge endpoint: {calls['set']}")
+        mgr._restore_system_proxy()
+        if calls["restore"] != [previous]:
+            raise AssertionError("disconnect must restore the previous system proxy snapshot")
+        if mgr._system_proxy_state is not None:
+            raise AssertionError("restored proxy snapshot must be cleared from the controller")
+    finally:
+        ctrl.sys.platform = original_platform
+        sp.get_state = original_get
+        sp.set_proxy = original_set
+        sp.restore = original_restore
+
+    # Crash cleanup must disable only matching slots, not another proxy on the
+    # same network service.
+    original_services = sp._mac_active_services
+    original_query = sp._mac_query_one
+    original_run = sp._mac_run
+    commands = []
+    try:
+        sp._mac_active_services = lambda: ["Wi-Fi"]
+        sp._mac_query_one = lambda _svc, verb: (
+            enabled["services"]["Wi-Fi"]["http"] if verb == "-getwebproxy"
+            else {"enabled": "Yes", "server": "proxy.corp", "port": "443"})
+        sp._mac_run = lambda args, check=True: commands.append(args)
+        sp._mac_disable_proxy_if_matches("127.0.0.1", 2082)
+    finally:
+        sp._mac_active_services = original_services
+        sp._mac_query_one = original_query
+        sp._mac_run = original_run
+    expected = [["/usr/sbin/networksetup", "-setwebproxystate", "Wi-Fi", "off"]]
+    if commands != expected:
+        raise AssertionError(f"selective macOS proxy cleanup was unsafe: {commands}")
+
+
 def _v3_connect_is_forgiving() -> None:
     # 21) v3.0.8 "just click and connect". The sing-box connect path must NOT
     #     roll back a usable tunnel on a strict secondary DNS check. Specifically:
@@ -6320,6 +6400,8 @@ check("watchdog: sing-box DNS guarded both leak modes, sustained-failure debounc
       _v3_singbox_dns_watchdog_guarded)
 check("disconnect/rollback stops sing-box → system DNS/routes restored",
       _v3_disconnect_restores_dns)
+check("macOS: Chromium browser proxy bridge restores and selectively cleans up",
+      _v3_macos_browser_proxy_bridge)
 check("ipv6: captured + rejected, gvisor stack, safe MTU/EIN (v3.0.13)",
       _v3_ipv6_capture_and_throughput)
 

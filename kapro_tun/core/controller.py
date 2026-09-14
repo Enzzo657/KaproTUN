@@ -12,7 +12,8 @@ from typing import Callable, Optional
 
 from . import (
     admin, app_log, dns_health, ipv6_block, killswitch, linux_tun_route,
-    paths, proc_stats, storage, tun_recovery, webrtc_block, xray_stats,
+    paths, proc_stats, storage, system_proxy, tun_recovery, webrtc_block,
+    xray_stats,
 )
 from .i18n import tr
 from .parser import ProxyConfig
@@ -225,6 +226,10 @@ class ConnectionManager:
         self._egress_fp: Optional[str] = None
         # Baseline for the health check's 'is the tunnel moving bytes?' test.
         self._health_traffic = None
+        # macOS Chromium can fail TLS over the userspace TUN while the same
+        # sing-box outbound works normally. Keep browsers on the loopback mixed
+        # inbound and restore the user's previous system proxy on disconnect.
+        self._system_proxy_state: Optional[dict] = None
         # Once-per-app-launch guard so the "ad-block is legacy-only" notice
         # isn't logged on every sing-box reconnect.
         self._singbox_adblock_noted = False
@@ -256,6 +261,7 @@ class ConnectionManager:
         # presence on next startup means a session died uncleanly), wipe the
         # credential-bearing runtime config, then take down the firewall rules.
         tun_recovery.clear()
+        self._restore_system_proxy()
         if self.sing_box_process.is_running():
             self.sing_box_process.stop()
         # Linux: undo the manual routes + resolvectl DNS we laid in place of
@@ -438,6 +444,47 @@ class ConnectionManager:
     def _singbox_health_proxy_url() -> str:
         return (f"http://{sing_box_config.HEALTH_PROXY_HOST}:"
                 f"{sing_box_config.HEALTH_PROXY_PORT}")
+
+    def _enable_macos_browser_proxy(self) -> None:
+        """Bridge proxy-aware macOS apps around Chromium's broken TUN TLS path."""
+        if (sys.platform != "darwin"
+                or not self.settings.get("auto_set_system_proxy", True)):
+            return
+        previous = None
+        try:
+            previous = system_proxy.get_state()
+            self._system_proxy_state = previous
+            # An empty override preserves the user's existing bypass domains.
+            system_proxy.set_proxy(
+                sing_box_config.HEALTH_PROXY_HOST,
+                sing_box_config.HEALTH_PROXY_PORT,
+                override="",
+            )
+            current = system_proxy.get_state()
+            if not system_proxy.state_uses_proxy(
+                    current, sing_box_config.HEALTH_PROXY_HOST,
+                    sing_box_config.HEALTH_PROXY_PORT):
+                raise RuntimeError("networksetup did not enable the proxy")
+            self._log("[*] macOS: браузерный трафик направлен через локальный "
+                      f"proxy {sing_box_config.HEALTH_PROXY_HOST}:"
+                      f"{sing_box_config.HEALTH_PROXY_PORT}.")
+        except Exception as e:
+            if previous is not None:
+                try:
+                    system_proxy.restore(previous)
+                except Exception:
+                    pass
+            self._system_proxy_state = None
+            self._log(f"[!] macOS: не удалось включить browser proxy bridge: {e}")
+
+    def _restore_system_proxy(self) -> None:
+        previous, self._system_proxy_state = self._system_proxy_state, None
+        if previous is None:
+            return
+        try:
+            system_proxy.restore(previous)
+        except Exception as e:
+            self._log(f"[!] Не удалось восстановить системный proxy: {e}")
 
     # --- runtime memory watchdog (v2.1.6) ---------------------------------
 
@@ -738,8 +785,10 @@ class ConnectionManager:
             # Confirmed live → switch the log filter to steady-state, so
             # ambiguous network errors become transient noise instead of alarms.
             self.sing_box_process.mark_live()
+            self._enable_macos_browser_proxy()
             self._log("[*] sing-box TUN активен — DNS и реальный трафик через VPN проходят.")
         except Exception:
+            self._restore_system_proxy()
             self.sing_box_process.stop()
             linux_tun_route.teardown()
             try:
