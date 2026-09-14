@@ -148,8 +148,8 @@ if _is_macos:
         info_plist={
             'CFBundleName': 'KaproTUN',
             'CFBundleDisplayName': 'KaproTUN',
-            'CFBundleShortVersionString': '1.0.0',
-            'CFBundleVersion': '1.0.0',
+            'CFBundleShortVersionString': '3.7.6',
+            'CFBundleVersion': '3.7.6',
             # We toggle system proxy via networksetup, which doesn't
             # need an entitlement, but mark as agent so the app stays
             # tray-only without a Dock icon when in the tray.

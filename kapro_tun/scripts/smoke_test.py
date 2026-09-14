@@ -3528,9 +3528,40 @@ def _tun_iface_stats_real_iface() -> None:
         raise AssertionError(f"timestamp not set: {s.timestamp}")
 
 
+def _tun_iface_stats_dynamic_name() -> None:
+    """macOS names TUN devices utunN, so locate ours by its stable address."""
+    from types import SimpleNamespace
+    from kapro_tun.core.xray_stats import query_tun_iface_stats
+
+    counters = SimpleNamespace(bytes_sent=123, bytes_recv=456)
+
+    class _FakePsutil:
+        @staticmethod
+        def net_io_counters(pernic=False):
+            return {"utun7": counters} if pernic else counters
+
+        @staticmethod
+        def net_if_addrs():
+            return {"utun7": [SimpleNamespace(address="10.255.0.2")]}
+
+    import sys as _sys
+    real = _sys.modules.get("psutil")
+    _sys.modules["psutil"] = _FakePsutil
+    try:
+        sample = query_tun_iface_stats("KaproTun", "10.255.0.2")
+    finally:
+        if real is not None:
+            _sys.modules["psutil"] = real
+        else:
+            _sys.modules.pop("psutil", None)
+    if sample is None or sample.uplink_bytes != 123 or sample.downlink_bytes != 456:
+        raise AssertionError(f"dynamic utun lookup failed: {sample}")
+
+
 check("psutil importable",                              _psutil_importable)
 check("query_tun_iface_stats: None for unknown iface",  _tun_iface_stats_unknown_name)
 check("query_tun_iface_stats: real iface returns data", _tun_iface_stats_real_iface)
+check("query_tun_iface_stats: dynamic utun by address",  _tun_iface_stats_dynamic_name)
 
 
 # ---------------------------------------------------------------------------
@@ -5053,7 +5084,26 @@ def _http_probe_is_bounded_and_safe() -> None:
             raise AssertionError(f"http_probe({bad!r}) returned non-bool")
 
 
+def _singbox_probe_does_not_require_local_ca_bundle() -> None:
+    """The frozen macOS app must not reject a live transport only because the
+    GitHub Actions Python CA path does not exist on the user's machine."""
+    from kapro_tun.core import dns_health
+
+    seen = []
+    real = dns_health.http_probe
+    dns_health.http_probe = lambda proxy_url, timeout, urls: seen.extend(urls) or True
+    try:
+        if not dns_health.singbox_outbound_probe("http://127.0.0.1:2082"):
+            raise AssertionError("sing-box outbound probe should return probe result")
+    finally:
+        dns_health.http_probe = real
+    if not seen or any(not url.startswith("http://") for url in seen):
+        raise AssertionError(f"sing-box readiness must not require TLS CA files: {seen}")
+
+
 check("C: dns_health.http_probe bounded + never raises", _http_probe_is_bounded_and_safe)
+check("C: sing-box readiness does not require local CA bundle",
+      _singbox_probe_does_not_require_local_ca_bundle)
 
 
 def _dead_tunnel_connect_rolls_back() -> None:
@@ -5204,7 +5254,10 @@ def _v3_config_structure() -> None:
             raise AssertionError("on Linux tun inbound must NOT auto_route")
     elif not inb[0].get("auto_route"):
         raise AssertionError("tun inbound must auto_route")
-    if inb[0].get("interface_name") != _sb_v3.TUN_DEVICE_NAME:
+    if _sb_v3._IS_MACOS:
+        if "interface_name" in inb[0]:
+            raise AssertionError("macOS must let the kernel allocate utunN")
+    elif inb[0].get("interface_name") != _sb_v3.TUN_DEVICE_NAME:
         raise AssertionError("tun interface_name mismatch")
     obs = full["outbounds"]
     if obs[0].get("tag") != "proxy":

@@ -78,7 +78,8 @@ def query_stats() -> Optional[TrafficStats]:
     return stats
 
 
-def query_tun_iface_stats(iface_name: str) -> Optional[TrafficStats]:
+def query_tun_iface_stats(iface_name: str,
+                          iface_address: str = "") -> Optional[TrafficStats]:
     """Read cumulative byte counters straight off the TUN network interface.
 
     Why this exists (v1.15.4): the `xray api stats` subprocess turned out
@@ -116,6 +117,20 @@ def query_tun_iface_stats(iface_name: str) -> Optional[TrafficStats]:
     except OSError:
         return None
     nic = per_nic.get(iface_name)
+    if nic is None and iface_address:
+        # macOS only permits kernel-assigned utunN names. Find our interface by
+        # its stable TUN address after sing-box has selected the actual name.
+        try:
+            per_addr = psutil.net_if_addrs()
+        except OSError:
+            per_addr = {}
+        dynamic_name = next(
+            (name for name, addrs in per_addr.items()
+             if any(str(getattr(addr, "address", "")).split("%", 1)[0]
+                    == iface_address for addr in addrs)),
+            "",
+        )
+        nic = per_nic.get(dynamic_name)
     if nic is None:
         return None
     # psutil semantics: bytes_sent = bytes leaving us via this iface

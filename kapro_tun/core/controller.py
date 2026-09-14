@@ -376,7 +376,8 @@ class ConnectionManager:
         First call after connect has no baseline and returns False."""
         try:
             sample = xray_stats.query_tun_iface_stats(
-                sing_box_config.TUN_DEVICE_NAME)
+                sing_box_config.TUN_DEVICE_NAME,
+                sing_box_config.TUN_INET4.split("/", 1)[0])
         except Exception:
             return False
         if sample is None:

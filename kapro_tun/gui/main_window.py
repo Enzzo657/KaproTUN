@@ -1893,8 +1893,10 @@ class MainWindow(QMainWindow):
 
         Reads kernel byte counters from the sing-box TUN interface via psutil
         (rock-solid, zero subprocess overhead) — the counters exist as soon as
-        sing-box brings the "KaproTun" interface up."""
-        sample = xray_stats.query_tun_iface_stats(sing_box_config.TUN_DEVICE_NAME)
+        sing-box brings the TUN interface up."""
+        sample = xray_stats.query_tun_iface_stats(
+            sing_box_config.TUN_DEVICE_NAME,
+            sing_box_config.TUN_INET4.split("/", 1)[0])
         if sample is None:
             return
         if self._prev_traffic is None:

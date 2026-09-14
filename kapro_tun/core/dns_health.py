@@ -107,10 +107,6 @@ _TUNNEL_PROBE_URLS = (
     "http://connectivitycheck.gstatic.com/generate_204",
 )
 
-_SYSTEM_TUN_PROBE_URLS = (
-    "https://www.cloudflare.com/cdn-cgi/trace",
-    "https://www.gstatic.com/generate_204",
-)
 _EGRESS_TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
 
 
@@ -121,7 +117,13 @@ def singbox_outbound_probe(proxy_url: str, timeout: float = 2.5) -> bool:
     outbound=proxy. It cannot accidentally pass through direct-domain or geoip
     routing and therefore cannot mark a dead VPN transport as connected.
     """
-    return http_probe(proxy_url, timeout=timeout, urls=_SYSTEM_TUN_PROBE_URLS)
+    # Use plain HTTP here intentionally. GitHub Actions' macOS Python embeds a
+    # build-runner CA path which is absent after PyInstaller moves the app to a
+    # user's Mac; an HTTPS probe then fails locally even though sing-box carried
+    # the CONNECT successfully. The proxy transport itself is encrypted and the
+    # health inbound is force-routed to it, so any 2xx/3xx HTTP response still
+    # proves that real bytes crossed the selected outbound.
+    return http_probe(proxy_url, timeout=timeout, urls=_TUNNEL_PROBE_URLS)
 
 
 def _trace_egress_ip(proxy_url: str | None, timeout: float = 2.5) -> str:
